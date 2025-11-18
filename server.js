@@ -250,7 +250,5 @@ app.get("/watch", (req, res) => res.send("Watch active!"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 // ---------- START SERVER ----------
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+
 });
