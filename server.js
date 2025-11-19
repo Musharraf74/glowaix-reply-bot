@@ -239,23 +239,26 @@ async function pollUnread() {
   }
 }
 
-// start poller
-setInterval(pollUnread, 15000);
-
-/* ---------- Simple routes ---------- */
-app.get("/", (req, res) => res.send("Glowaix Email Bot Server Running!"));
-app.get("/watch", (req, res) => res.send("Watch active!"));
-// debug route to list all Gmail labels
-app.get("/labels", async (req, res) => {
-  try {
-    const list = await gmail.users.labels.list({ userId: "me" });
-    res.json(list.data.labels);
-  } catch (err) {
-    console.error("Label fetch error:", err.message);
-    res.status(500).send("Error fetching labels");
-  }
-
-/* ---------- Start server ---------- */
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
+// start poller  
+setInterval(pollUnread, 15000);  
+  
+/* --------- Simple routes ---------- */  
+app.get("/", (req, res) => res.send("Glowaix Email Bot Server Running!"));  
+app.get("/watch", (req, res) => res.send("Watch active!"));  
+  
+// Debug route to list all Gmail labels  
+app.get("/labels", async (req, res) => {  
+  try {  
+    const list = await gmail.users.labels.list({ userId: "me" });  
+    res.json(list.data.labels);  
+  } catch (err) {  
+    console.error("Label fetch error:", err.message);  
+    res.status(500).send("Error fetching labels");  
+  }  
+});  
+  
+/* --------- Start server ---------- */  
+const PORT = process.env.PORT || 10000;  
+app.listen(PORT, () =>  
+  console.log(`Server running on port ${PORT}`)  
+);
