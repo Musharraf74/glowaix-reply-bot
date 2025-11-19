@@ -138,8 +138,18 @@ Instagram: ${INSTAGRAM_LINK}
 Contact: ${CONTACT_EMAIL}
 
 Rules:
-- Output JSON { "subject": "", "reply_html": "", "confidence": 1.0 }
-- reply_html max 350 words.
+- Output MUST be ONLY valid JSON. No text before or after the JSON.
+- STRICTLY follow this exact structure:
+
+{
+  "subject": "string",
+  "reply_html": "string",
+  "confidence": 1.0
+}
+
+- Do NOT include explanations, markdown, comments or extra notes.
+- Do NOT add anything outside the JSON object.
+- reply_html maximum 350 words.
 `;
 
   return { system, user };
