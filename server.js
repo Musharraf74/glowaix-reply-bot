@@ -106,8 +106,10 @@ async function lightResearch(domain) {
   try {
     const res = await fetch("https://" + domain, { timeout: 4000 });
     const html = await res.text();
+
     const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] || "";
     const desc = html.match(/<meta name=["']description["'] content=["']([^"']+)/i)?.[1] || "";
+
     return `${title}${desc ? " — " + desc : ""}`.trim();
   } catch {
     return "No public website found.";
