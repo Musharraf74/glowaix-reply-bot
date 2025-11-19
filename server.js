@@ -1,4 +1,4 @@
-// server.js — DeepSeek via OpenRouter (Unlimited)
+// server.js — Generic Chat provider (OpenRouter / Groq / etc.) + Gmail auto-reply
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
@@ -15,17 +15,24 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 
 const AGENCY_NAME = process.env.AGENCY_NAME || "Glowaix";
-const SAMPLE_VIDEO_LINK = process.env.SAMPLE_VIDEO_LINK;
-const PORTFOLIO_LINK = process.env.PORTFOLIO_LINK;
-const INSTAGRAM_LINK = process.env.INSTAGRAM_LINK;
-const CONTACT_EMAIL = process.env.CONTACT_EMAIL;
-
+const SAMPLE_VIDEO_LINK = process.env.SAMPLE_VIDEO_LINK || "";
+const PORTFOLIO_LINK = process.env.PORTFOLIO_LINK || "";
+const INSTAGRAM_LINK = process.env.INSTAGRAM_LINK || "";
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL || "";
 const FINAL_SYSTEM_PROMPT = process.env.FINAL_SYSTEM_PROMPT || "";
 const HOLD_FOR_APPROVAL = (process.env.HOLD_FOR_APPROVAL || "true") === "true";
 const CONFIDENCE_THRESHOLD = parseFloat(process.env.CONFIDENCE_THRESHOLD || "0.6");
 
-const DEEPSEEK_KEY = process.env.DEEPSEEK_KEY;
-const AUTO_REPLIED_LABEL_ID = process.env.AUTO_REPLIED_LABEL_ID;
+// Provider (OpenRouter / Groq / other) settings — set these in Render env
+// PROVIDER_URL: e.g. "https://openrouter.ai/api/v1/chat/completions" or your Groq endpoint
+// PROVIDER_KEY: the API key for that provider
+// PROVIDER_MODEL: e.g. "deepseek/deepseek-chat" or "gpt-4o-mini-research" or "groq/groq-1"
+const PROVIDER_URL = process.env.PROVIDER_URL || "";
+const PROVIDER_KEY = process.env.PROVIDER_KEY || "";
+const PROVIDER_MODEL = process.env.PROVIDER_MODEL || "gpt-4o-mini-research";
+
+// Gmail label id to add after reply — use the full label id string returned by Gmail list (example: "Label_6545156454014858465")
+const AUTO_REPLIED_LABEL_ID = process.env.AUTO_REPLIED_LABEL_ID || "Label_6545156454014858465";
 
 /* ---------- OAuth2 client ---------- */
 const REDIRECT_URI = "https://developers.google.com/oauthplayground";
@@ -34,38 +41,56 @@ oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
 
 const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-/* ---------- DeepSeek via OpenRouter ---------- */
-async function deepseekChat(system, user) {
-  try {
-    const resp = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "deepseek/deepseek-chat",
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
-        ],
-        temperature: 0.7,
-        max_tokens: 40
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${DEEPSEEK_KEY}`,
-          "HTTP-Referer": "https://glowaix-email-bot.onrender.com",
-          "X-Title": "Glowaix Email Bot"
-        }
-      }
-    );
+/* ---------- Generic Provider Chat Function ---------- */
+async function providerChat(system, user) {
+  if (!PROVIDER_URL || !PROVIDER_KEY) {
+    console.error("Provider URL or KEY not set. Set PROVIDER_URL and PROVIDER_KEY in env.");
+    return null;
+  }
 
-    return resp.data.choices[0].message.content;
+  try {
+    // Generic request body used by many 'chat/completions' endpoints.
+    // If your provider needs different fields, update this function.
+    const body = {
+      model: PROVIDER_MODEL,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user }
+      ],
+      temperature: 0.7,
+      max_tokens: 700
+    };
+
+    const resp = await axios.post(PROVIDER_URL, body, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${PROVIDER_KEY}`
+      },
+      timeout: 30000
+    });
+
+    // Try common response shapes:
+    // - openrouter / openai-like: resp.data.choices[0].message.content
+    // - some providers: resp.data.output[0].content[0].text etc.
+    if (resp?.data?.choices && resp.data.choices[0]?.message?.content) {
+      return resp.data.choices[0].message.content;
+    }
+    if (resp?.data?.choices && typeof resp.data.choices[0]?.text === "string") {
+      return resp.data.choices[0].text;
+    }
+    if (resp?.data?.output && resp.data.output[0]?.content && resp.data.output[0].content[0]?.text) {
+      return resp.data.output[0].content[0].text;
+    }
+
+    // fallback to whole data as string
+    return typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data);
   } catch (err) {
-    console.error("DeepSeek Error:", err.response?.data || err.message);
+    console.error("Provider Chat Error:", err.response?.data || err.message || err);
     return null;
   }
 }
 
-/* ---------- build raw RFC email ---------- */
+/* ---------- helper to build raw RFC email ---------- */
 function buildRawEmail({ to, from, subject, html, inReplyTo, references }) {
   const message = [
     `From: ${from}`,
@@ -86,12 +111,12 @@ function buildRawEmail({ to, from, subject, html, inReplyTo, references }) {
     .replace(/=+$/, "");
 }
 
-/* ---------- extract text ---------- */
+/* ---------- extract plain text from message payload ---------- */
 function extractPlainTextFromParts(payload) {
   try {
     if (!payload) return "";
     if (payload.parts && payload.parts.length) {
-      const part = payload.parts.find(p => p.mimeType === "text/plain") || payload.parts[0];
+      const part = payload.parts.find((p) => p.mimeType === "text/plain") || payload.parts[0];
       if (part?.body?.data) {
         return Buffer.from(part.body.data, "base64").toString("utf8");
       }
@@ -104,27 +129,23 @@ function extractPlainTextFromParts(payload) {
   }
 }
 
-/* ---------- Mini Research ---------- */
+/* ---------- lightweight research (homepage title/meta) ---------- */
 async function lightResearch(domain) {
   if (!domain || domain.includes("gmail.com")) return "No public website found.";
-
   try {
     const res = await fetch("https://" + domain, { timeout: 4000 });
     const html = await res.text();
-
     const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] || "";
-    const desc = html.match(/<meta name=["']description["'] content=["']([^"']+)/i)?.[1] || "";
-
+    const desc = html.match(/<meta name=["']description["'] content=["']([^"']+)["']/i)?.[1] || "";
     return `${title}${desc ? " — " + desc : ""}`.trim();
   } catch {
     return "No public website found.";
   }
 }
 
-/* ---------- Build AI Prompt ---------- */
+/* ---------- Build prompt ---------- */
 function buildAIMessage({ senderEmail, senderName, subject, threadText, researchSummary }) {
-  const system = FINAL_SYSTEM_PROMPT ||
-  `You are a highly skilled professional email assistant for ${AGENCY_NAME}. Generate JSON response.`;
+  const system = FINAL_SYSTEM_PROMPT || `You are a highly skilled professional email assistant for ${AGENCY_NAME}. Generate JSON response.`;
 
   const user = `
 Incoming email:
@@ -145,17 +166,18 @@ Instagram: ${INSTAGRAM_LINK}
 Contact: ${CONTACT_EMAIL}
 
 Rules:
-- Output must be ONLY valid JSON.
-- Return exactly this structure:
+- Output MUST be ONLY valid JSON. No text before or after the JSON.
+- STRICTLY follow this exact structure:
 
 {
-  "subject": "",
-  "reply_html": "",
+  "subject": "string",
+  "reply_html": "string",
   "confidence": 1.0
 }
 
-- No text outside JSON.
-- reply_html max 350 words.
+- Do NOT include explanations, markdown, comments or extra notes.
+- Do NOT add anything outside the JSON object.
+- reply_html maximum 350 words.
 `;
 
   return { system, user };
@@ -176,11 +198,10 @@ async function processMessage(message) {
     const subject = headers.find(h => h.name === "Subject")?.value || "";
     const fromHeader = headers.find(h => h.name === "From")?.value || "";
 
-    const senderEmail = (fromHeader.match(/<(.+?)>/)?.[1]) || fromHeader.split(" ").pop();
-    const senderName = fromHeader.split("<")[0].trim();
+    const senderEmail = (fromHeader.match(/<(.+?)>/)?.[1]) || (fromHeader.split(" ").pop() || "");
+    const senderName = (fromHeader.split("<")[0] || "").trim();
 
     const threadId = full.data.threadId;
-
     const thread = await gmail.users.threads.get({
       userId: "me",
       id: threadId,
@@ -188,11 +209,11 @@ async function processMessage(message) {
     });
 
     let threadText = "";
-    thread.data.messages.forEach(m => {
+    for (const m of (thread.data.messages || [])) {
       threadText += extractPlainTextFromParts(m.payload) + "\n---\n";
-    });
+    }
 
-    const domain = senderEmail.split("@")[1] || "";
+    const domain = (senderEmail.split("@")[1] || "");
     const researchSummary = await lightResearch(domain);
 
     const { system, user } = buildAIMessage({
@@ -203,23 +224,25 @@ async function processMessage(message) {
       researchSummary
     });
 
-    const aiRaw = await deepseekChat(system, user);
+    // call provider
+    const aiRaw = await providerChat(system, user);
     if (!aiRaw) return;
 
+    // provider might return raw JSON string or plain text — try parse
     let data;
     try {
-      data = JSON.parse(aiRaw);
-    } catch {
-      console.log("DeepSeek output NOT JSON");
+      data = JSON.parse(typeof aiRaw === "string" ? aiRaw.trim() : aiRaw);
+    } catch (err) {
+      console.log("Provider output NOT JSON — saved for manual review:", aiRaw);
       return;
     }
 
     if (!data.confidence || data.confidence < CONFIDENCE_THRESHOLD) {
-      console.log("Low-confidence → manual review");
+      console.log("Low-confidence → manual review:", data.confidence);
       return;
     }
 
-    const replyHtml = data.reply_html
+    const replyHtml = (data.reply_html || "")
       .replace(/\[SAMPLE_VIDEO_LINK\]/g, SAMPLE_VIDEO_LINK)
       .replace(/\[PORTFOLIO_LINK\]/g, PORTFOLIO_LINK)
       .replace(/\[INSTAGRAM_LINK\]/g, INSTAGRAM_LINK)
@@ -235,7 +258,7 @@ async function processMessage(message) {
     });
 
     if (HOLD_FOR_APPROVAL) {
-      console.log("HOLD_FOR_APPROVAL → reply NOT sent");
+      console.log("HOLD_FOR_APPROVAL → reply generated (not sent). SUBJECT:", data.subject);
       return;
     }
 
@@ -244,6 +267,7 @@ async function processMessage(message) {
       requestBody: { raw }
     });
 
+    // mark as read + add custom label (use label id, not name)
     await gmail.users.messages.modify({
       userId: "me",
       id: msgId,
@@ -254,9 +278,8 @@ async function processMessage(message) {
     });
 
     console.log("Reply sent to", senderEmail);
-
   } catch (err) {
-    console.error("processMessage error:", err.message);
+    console.error("processMessage error:", err?.response?.data || err?.message || err);
   }
 }
 
@@ -275,19 +298,21 @@ async function pollUnread() {
     });
 
     const messages = listRes.data.messages || [];
-    for (const m of messages) await processMessage(m);
-
+    for (const m of messages) {
+      await processMessage(m);
+    }
   } catch (err) {
-    console.error("Poll error:", err.message);
+    console.error("Poll error:", err?.message || err);
   }
 
   isProcessing = false;
 }
 
+// start poller every 15s
 setInterval(pollUnread, 15000);
 
 /* ---------- ROUTES ---------- */
-app.get("/", (req, res) => res.send("Glowaix Email Bot Running (DeepSeek + OpenRouter)!"));
+app.get("/", (req, res) => res.send("Glowaix Email Bot Running (Generic provider)!"));
 app.get("/watch", (req, res) => res.send("Watch active!"));
 app.get("/labels", async (req, res) => {
   try {
