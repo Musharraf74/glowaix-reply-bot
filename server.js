@@ -46,7 +46,7 @@ async function deepseekChat(system, user) {
           { role: "user", content: user }
         ],
         temperature: 0.7,
-        max_tokens: 700
+        max_tokens: 40
       },
       {
         headers: {
