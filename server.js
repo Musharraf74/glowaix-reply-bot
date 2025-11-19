@@ -1,4 +1,4 @@
-// server.js — DeepSeek Version (NO OPENAI LIMITS)
+// server.js — DeepSeek via OpenRouter (Unlimited)
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
@@ -30,13 +30,13 @@ oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
 
 const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-/* ---------- DeepSeek Chat Function ---------- */
+/* ---------- DeepSeek Chat via OPENROUTER ---------- */
 async function deepseekChat(system, user) {
   try {
     const resp = await axios.post(
-      "https://api.deepseek.com/chat/completions",
+      "https://openrouter.ai/api/v1/chat/completions",
       {
-        model: "deepseek-chat",
+        model: "deepseek/deepseek-chat",
         messages: [
           { role: "system", content: system },
           { role: "user", content: user }
@@ -47,7 +47,9 @@ async function deepseekChat(system, user) {
       {
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${DEEPSEEK_KEY}`
+          Authorization: `Bearer ${DEEPSEEK_KEY}`,
+          "HTTP-Referer": "https://glowaix-email-bot.onrender.com",
+          "X-Title": "Glowaix Email Bot"
         }
       }
     );
@@ -72,7 +74,7 @@ function buildRawEmail({ to, from, subject, html, inReplyTo, references }) {
     "",
     html,
   ].join("\n");
-  
+
   return Buffer.from(message)
     .toString("base64")
     .replace(/\+/g, "-")
@@ -80,7 +82,7 @@ function buildRawEmail({ to, from, subject, html, inReplyTo, references }) {
     .replace(/=+$/, "");
 }
 
-/* ---------- extract plain text from message payload ---------- */
+/* ---------- extract text ---------- */
 function extractPlainTextFromParts(payload) {
   try {
     if (!payload) return "";
@@ -101,7 +103,6 @@ function extractPlainTextFromParts(payload) {
 /* ---------- lightweight research ---------- */
 async function lightResearch(domain) {
   if (!domain || domain.includes("gmail.com")) return "No public website found.";
-  
   try {
     const res = await fetch("https://" + domain, { timeout: 4000 });
     const html = await res.text();
@@ -137,7 +138,7 @@ Instagram: ${INSTAGRAM_LINK}
 Contact: ${CONTACT_EMAIL}
 
 Rules:
-- Output must be JSON { "subject": "", "reply_html": "", "confidence": 1.0 }
+- Output JSON { "subject": "", "reply_html": "", "confidence": 1.0 }
 - reply_html max 350 words.
 `;
 
@@ -163,6 +164,7 @@ async function processMessage(message) {
     const senderName = fromHeader.split("<")[0].trim();
 
     const threadId = full.data.threadId;
+
     const thread = await gmail.users.threads.get({
       userId: "me",
       id: threadId,
@@ -185,7 +187,6 @@ async function processMessage(message) {
       researchSummary
     });
 
-    /* ---------- CALL DEEPSEEK ---------- */
     const aiRaw = await deepseekChat(system, user);
     if (!aiRaw) return;
 
@@ -218,9 +219,7 @@ async function processMessage(message) {
     });
 
     if (HOLD_FOR_APPROVAL) {
-      console.log("HOLD_FOR_APPROVAL → reply generated NOT sent");
-      console.log("SUBJECT:", data.subject);
-      console.log("HTML:", replyHtml);
+      console.log("HOLD_FOR_APPROVAL → reply NOT sent");
       return;
     }
 
@@ -241,7 +240,7 @@ async function processMessage(message) {
     console.log("Reply sent to", senderEmail);
 
   } catch (err) {
-    console.error("processMessage error:", err.message || err);
+    console.error("processMessage error:", err.message);
   }
 }
 
@@ -272,7 +271,7 @@ async function pollUnread() {
 setInterval(pollUnread, 15000);
 
 /* ---------- ROUTES ---------- */
-app.get("/", (req, res) => res.send("Glowaix Email Bot Running (DeepSeek)!"));
+app.get("/", (req, res) => res.send("Glowaix Email Bot Running (DeepSeek - OpenRouter)!"));
 app.get("/watch", (req, res) => res.send("Watch active!"));
 
 app.get("/labels", async (req, res) => {
