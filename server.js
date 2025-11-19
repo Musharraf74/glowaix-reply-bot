@@ -238,6 +238,194 @@ async function processMessage(message) {
       requestBody: { raw }
     });
 
+    // 🔥 IMPORTANT — add your REAL GMAIL LABEL ID here:
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: msgId,
+      requestBody: {
+        removeLabelIds: ["UNREAD"],
+        addLabelIds: ["Label_6545156454014858465"]
+      }
+    });
+
+    console.log("Reply sent to", senderEmail);
+
+  } catch (err) {
+    console.error("processMessage error:", err.message);
+  }
+}
+
+/* ---------- POLLER ---------- */
+let isProcessing = false;
+
+async function pollUnread() {
+  if (isProcessing) return;
+  isProcessing = true;
+
+  try {
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "is:unread -from:" + CONTACT_EMAIL,
+      maxResults: 20
+    });
+
+    const messages = listRes.data.messages || [];
+    for (const m of messages) await processMessage(m);
+
+  } catch (err) {
+    console.error("Poll error:", err.message);
+  }
+
+  isProcessing = false;
+}
+
+setInterval(pollUnread, 15000);
+
+/* ---------- ROUTES ---------- */
+app.get("/", (req, res) => res.send("Glowaix Email Bot Running (DeepSeek - OpenRouter)!"));
+app.get("/watch", (req, res) => res.send("Watch active!"));
+
+app.get("/labels", async (req, res) => {
+  try {
+    const list = await gmail.users.labels.list({ userId: "me" });
+    res.json(list.data.labels);
+  } catch (err) {
+    res.status(500).send("Error fetching labels");
+  }
+});
+
+/* ---------- START SERVER ---------- */
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));    return `${title}${desc ? " — " + desc : ""}`.trim();
+  } catch {
+    return "No public website found.";
+  }
+}
+
+/* ---------- Build prompt ---------- */
+function buildAIMessage({ senderEmail, senderName, subject, threadText, researchSummary }) {
+  const system = FINAL_SYSTEM_PROMPT || 
+  `You are a highly skilled professional email assistant for ${AGENCY_NAME}. Generate JSON response.`;
+
+  const user = `
+Incoming email:
+Sender: ${senderEmail}
+Name: ${senderName}
+Subject: ${subject}
+
+Thread:
+${threadText}
+
+Research:
+${researchSummary}
+
+Agency info:
+Sample: ${SAMPLE_VIDEO_LINK}
+Portfolio: ${PORTFOLIO_LINK}
+Instagram: ${INSTAGRAM_LINK}
+Contact: ${CONTACT_EMAIL}
+
+Rules:
+- Output MUST be ONLY valid JSON. No text before or after the JSON.
+- STRICTLY follow this exact structure:
+
+{
+  "subject": "string",
+  "reply_html": "string",
+  "confidence": 1.0
+}
+
+- Do NOT include explanations, markdown, comments or extra notes.
+- Do NOT add anything outside the JSON object.
+- reply_html maximum 350 words.
+`;
+
+  return { system, user };
+}
+
+/* ---------- MAIN MESSAGE HANDLER ---------- */
+async function processMessage(message) {
+  try {
+    const msgId = message.id;
+
+    const full = await gmail.users.messages.get({
+      userId: "me",
+      id: msgId,
+      format: "full"
+    });
+
+    const headers = full.data.payload.headers || [];
+    const subject = headers.find(h => h.name === "Subject")?.value || "";
+    const fromHeader = headers.find(h => h.name === "From")?.value || "";
+
+    const senderEmail = (fromHeader.match(/<(.+?)>/)?.[1]) || fromHeader.split(" ").pop();
+    const senderName = fromHeader.split("<")[0].trim();
+
+    const threadId = full.data.threadId;
+
+    const thread = await gmail.users.threads.get({
+      userId: "me",
+      id: threadId,
+      format: "full"
+    });
+
+    let threadText = "";
+    thread.data.messages.forEach(m => {
+      threadText += extractPlainTextFromParts(m.payload) + "\n---\n";
+    });
+
+    const domain = senderEmail.split("@")[1] || "";
+    const researchSummary = await lightResearch(domain);
+
+    const { system, user } = buildAIMessage({
+      senderEmail,
+      senderName,
+      subject,
+      threadText,
+      researchSummary
+    });
+
+    const aiRaw = await deepseekChat(system, user);
+    if (!aiRaw) return;
+
+    let data;
+    try {
+      data = JSON.parse(aiRaw);
+    } catch {
+      console.log("DeepSeek output NOT JSON");
+      return;
+    }
+
+    if (!data.confidence || data.confidence < CONFIDENCE_THRESHOLD) {
+      console.log("Low-confidence → manual review");
+      return;
+    }
+
+    const replyHtml = data.reply_html
+      .replace(/\[SAMPLE_VIDEO_LINK\]/g, SAMPLE_VIDEO_LINK)
+      .replace(/\[PORTFOLIO_LINK\]/g, PORTFOLIO_LINK)
+      .replace(/\[INSTAGRAM_LINK\]/g, INSTAGRAM_LINK)
+      .replace(/\[CONTACT_EMAIL\]/g, CONTACT_EMAIL);
+
+    const raw = buildRawEmail({
+      to: senderEmail,
+      from: `${AGENCY_NAME} <${CONTACT_EMAIL}>`,
+      subject: data.subject || `Re: ${subject}`,
+      html: replyHtml,
+      inReplyTo: full.data.id,
+      references: full.data.id
+    });
+
+    if (HOLD_FOR_APPROVAL) {
+      console.log("HOLD_FOR_APPROVAL → reply NOT sent");
+      return;
+    }
+
+    await gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw }
+    });
+
     await gmail.users.messages.modify({
       userId: "me",
       id: msgId,
