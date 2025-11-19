@@ -142,7 +142,7 @@ async function processMessage(message) {
     const { system, user } = buildAIMessage({ senderEmail, senderName, subject, threadText, researchSummary });
 
     const aiResponse = await openai.chat.completions.create({
-      model: "gpt-4o-mini-tts",
+      model: "gpt-4o-mini-1.5",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user }
